@@ -2,12 +2,14 @@
 
 An **Android-only** SMS-relay app. It listens to a realtime WebSocket feed and
 sends an SMS **directly through the SIM** — no system compose screen, no second
-confirmation tap. This silent send is the entire point of the project.
+confirmation tap. This silent send is the entire point of the project. Each feed
+event carries a phone number and the SMS body to send.
 
 The socket runs inside a **foreground service** in a background isolate, so the
-app stays connected and auto-sends an SMS for each incoming message even while it
-is minimized, closed, or after a reboot. A persistent notification is always
-shown while the service runs (mandatory on Android).
+app stays connected and auto-sends an SMS for each incoming request even while it
+is minimized, closed, or after a reboot (the service auto-starts on boot). A
+persistent notification is always shown while the service runs (mandatory on
+Android), and a separate one-off notification fires for each SMS that is sent.
 
 > **Android only.** iOS cannot send SMS without a user-driven compose screen, so
 > the app is not expected to function on iOS even though the Flutter project
@@ -20,10 +22,11 @@ shown while the service runs (mandatory on Android).
   Pusher's hosted cloud and cannot reach a self-hosted `/app/{appKey}` endpoint —
   so the Pusher protocol is spoken directly over a raw `web_socket_channel`.
 - **Flow.** connect → on `pusher:connection_established`, subscribe to the
-  channel → each non-`pusher:*` event carries the double-encoded message payload
-  (a phone number and the SMS body) → the SMS is auto-sent through the system
-  default SIM. The socket replies `pong` to `pusher:ping` and auto-reconnects
-  with exponential backoff (capped at 30s).
+  channel → each non-`pusher:*` event on the channel carries the double-encoded
+  payload (a phone number and the SMS body) → the SMS is auto-sent through the
+  system default SIM. The socket replies `pusher:pong` to `pusher:ping` and
+  auto-reconnects with exponential backoff (1, 2, 4, 8, 16 → capped at 30s,
+  retried indefinitely).
 - **Isolates.** The socket + SMS-send logic live in the background-service
   isolate; the UI observes state over IPC. The `.env` is loaded inside the
   background isolate (where the socket actually runs).
@@ -47,7 +50,7 @@ shown while the service runs (mandatory on Android).
    | --------------- | ------------------------------------------------------------------------ |
    | `WEBSOCKET_URL` | Full Reverb URL including the `/app/{appKey}` path (e.g. `wss://host/app/key`). |
    | `KEY`           | Kept for private-channel auth; not needed for the current public channel. |
-   | `CHANNEL_NAME`  | The channel to subscribe to (e.g. `otp-sms-requests`).                    |
+   | `CHANNEL_NAME`  | The channel to subscribe to (e.g. `sms-requests`).                       |
 
 3. **Run on a real device**
 
@@ -98,7 +101,7 @@ MVVM, one layer per directory under `lib/`, with a strict dependency direction:
 **view → view-model → service → model** (never reach backwards).
 
 - **Services own all platform/plugin imports** so upper layers see only domain
-  types (`SmsSendResult`, `SocketStatus`, `OtpMessage`).
+  types (`SmsSendResult`, `SocketStatus`, `SmsRequest`).
 - **View-models import only `flutter/widgets`** (no `material`, no `BuildContext`,
   no plugins) and are unit-testable in isolation.
 - There is no DI framework; `main.dart` constructs the services and injects them
@@ -111,13 +114,13 @@ The app has two independent vertical slices:
 | File                                      | Responsibility                                                                 |
 | ----------------------------------------- | ----------------------------------------------------------------------------- |
 | `models/socket_status.dart`               | `SocketStatus` enum.                                                           |
-| `models/otp_message.dart`                 | The incoming message value object (`fromJson`, `isValid`).                     |
+| `models/sms_request.dart`                 | The incoming `SmsRequest` value object (`phoneNumber`, `code`; `fromJson`, `isValid`). |
 | `config/socket_config.dart`              | `SocketConfig.fromEnv()` reads `url`, `channel`, `authKey`.                    |
 | `services/socket_service.dart`            | Speaks the Pusher protocol by hand over `web_socket_channel`; runs in the background isolate. |
-| `services/otp_service_controller.dart`    | Abstract interface the UI/view-model depend on (keeps them testable).          |
-| `services/otp_background_service.dart`    | Real implementation: UI-side bridge, `configureOtpBackgroundService()`, and the `otpServiceOnStart` background isolate that loads `.env`, runs the socket, and auto-sends an SMS for each incoming message. |
+| `services/relay_service_controller.dart`  | `RelayServiceController` — abstract interface the UI/view-model depend on (keeps them testable). |
+| `services/relay_background_service.dart`  | Real implementation: `RelayBackgroundService` UI-side bridge, `configureRelayBackgroundService()`, and the `relayServiceOnStart` background isolate that loads `.env`, runs the socket, and auto-sends an SMS for each incoming request. |
 | `viewmodels/start_viewmodel.dart`         | Bridges controller streams into getters; `dispose()` does **not** stop the service (it must outlive the screen). |
-| `views/start_view.dart`                   | Live status, start/stop controls, the latest message, SMS-result snackbars; requests permissions and starts the service on mount. |
+| `views/start_view.dart`                   | Live status, start/stop controls, the latest request, SMS-result snackbars; requests permissions and starts the service on mount. |
 
 ### SMS sender (pushed from the start screen)
 
@@ -131,7 +134,9 @@ The app has two independent vertical slices:
 ### Native wiring (must stay in sync)
 
 - `android/app/src/main/AndroidManifest.xml` — declares `SEND_SMS`, `INTERNET`,
-  the foreground-service permissions, and merges
+  `FOREGROUND_SERVICE`, `FOREGROUND_SERVICE_DATA_SYNC`, `POST_NOTIFICATIONS`,
+  `WAKE_LOCK`, `RECEIVE_BOOT_COMPLETED` (auto-start on boot), and
+  `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS`, and merges
   `android:foregroundServiceType="dataSync"` into the `flutter_background_service`
   service entry.
 - `android/app/build.gradle.kts` — pins `targetSdk = 34` and enables core-library
