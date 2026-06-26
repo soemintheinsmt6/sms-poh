@@ -1,5 +1,5 @@
 name: sms_poh
-description: "A new Flutter project."
+description: "Android-only SMS-relay app that listens to a Laravel Reverb WebSocket feed and silently sends an SMS through the SIM."
 # The following line prevents the package from being accidentally published to
 # pub.dev using `flutter pub publish`. This is preferred for private packages.
 publish_to: 'none' # Remove this line if you wish to publish to pub.dev
@@ -39,6 +39,15 @@ dependencies:
   another_telephony: ^0.4.0
   # Runtime permission requests (SEND_SMS).
   permission_handler: ^11.3.1
+  # Raw WebSocket; we speak the Pusher protocol (Laravel Reverb) over it so we
+  # can point at the self-hosted /app/{key} endpoint.
+  web_socket_channel: ^3.0.0
+  # Loads socket url/key/channel from a .env file.
+  flutter_dotenv: ^5.1.0
+  # Foreground service so the socket stays alive when the app is backgrounded.
+  flutter_background_service: ^5.0.0
+  # Creates the Android notification channel for the foreground service.
+  flutter_local_notifications: ^17.2.2
 
 dev_dependencies:
   flutter_test:
@@ -61,6 +70,10 @@ flutter:
   # included with your application, so that you can use the icons in
   # the material Icons class.
   uses-material-design: true
+
+  # Bundle the env file so flutter_dotenv can load it at runtime.
+  assets:
+    - .env
 
   # To add assets to your application, add an assets section, like this:
   # assets:
