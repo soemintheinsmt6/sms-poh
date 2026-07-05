@@ -43,6 +43,7 @@ class SendSmsViewModel extends ChangeNotifier {
       final result = await _smsService.sendSms(to: number, message: message);
       _feedback = switch (result) {
         SmsSendResult.sent => 'SMS sent to $number on the default SIM.',
+        SmsSendResult.failed => "Couldn't send the SMS. Please try again.",
         SmsSendResult.permissionDenied => 'SMS permission is required to send.',
         SmsSendResult.permissionPermanentlyDenied =>
           'SMS permission denied. Enable it in Settings.',

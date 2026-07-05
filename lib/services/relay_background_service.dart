@@ -10,6 +10,7 @@ import '../models/sms_request.dart';
 import '../models/socket_status.dart';
 import '../models/sms_send_result.dart';
 import 'relay_service_controller.dart';
+import 'sms_send_queue.dart';
 import 'sms_service.dart';
 import 'socket_service.dart';
 
@@ -125,6 +126,10 @@ void relayServiceOnStart(ServiceInstance service) async {
 
   final socket = SocketService(SocketConfig.fromEnv());
   final sms = SmsService();
+  // Serializes + throttles sends so a burst of requests can't overrun the
+  // carrier's SMS rate limit (which silently drops messages while the device
+  // still marks them "sent").
+  final sendQueue = SmsSendQueue(sms);
   final notifications = FlutterLocalNotificationsPlugin();
 
   var lastStatus = SocketStatus.disconnected;
@@ -145,35 +150,41 @@ void relayServiceOnStart(ServiceInstance service) async {
     updateNotification('WebSocket: ${status.name}');
   });
 
-  socket.requestStream.listen((request) async {
+  socket.requestStream.listen((request) {
     lastRequest = request;
     service.invoke('request', {
       'phone_number': request.phoneNumber,
       'code': request.code,
     });
 
+    // Hand off to the queue instead of sending inline: the stream can deliver
+    // several requests before the first send finishes, and the queue serializes
+    // and throttles them. Report the outcome when *this* message's send settles.
     final smsBody = 'Your verification code is ${request.code}';
-    final result = await sms.sendSms(to: request.phoneNumber, message: smsBody);
-    final ok = result == SmsSendResult.sent;
-    final summary = ok
-        ? 'Sent verification to ${request.phoneNumber}'
-        : 'Send failed for ${request.phoneNumber} (${result.name})';
-    service.invoke('sms', {'message': summary});
-    updateNotification(summary);
+    sendQueue.enqueue(to: request.phoneNumber, message: smsBody).then((
+      result,
+    ) async {
+      final ok = result == SmsSendResult.sent;
+      final summary = ok
+          ? 'Sent verification to ${request.phoneNumber}'
+          : 'Send failed for ${request.phoneNumber} (${result.name})';
+      service.invoke('sms', {'message': summary});
+      updateNotification(summary);
 
-    await notifications.show(
-      request.phoneNumber.hashCode & 0x7fffffff,
-      ok ? 'Verification sent' : 'Verification failed',
-      summary,
-      const NotificationDetails(
-        android: AndroidNotificationDetails(
-          kRelayEventsChannelId,
-          'Verification Events',
-          importance: Importance.high,
-          priority: Priority.high,
+      await notifications.show(
+        request.phoneNumber.hashCode & 0x7fffffff,
+        ok ? 'Verification sent' : 'Verification failed',
+        summary,
+        const NotificationDetails(
+          android: AndroidNotificationDetails(
+            kRelayEventsChannelId,
+            'Verification Events',
+            importance: Importance.high,
+            priority: Priority.high,
+          ),
         ),
-      ),
-    );
+      );
+    });
   });
 
   // The UI calls this on open to fetch the current state (late subscribers

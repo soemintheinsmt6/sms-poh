@@ -7,6 +7,11 @@ enum SmsSendResult {
   /// The message was handed to the SIM for sending.
   sent,
 
+  /// The native send call rejected the message *before* it was dispatched
+  /// (bad argument, SmsManager error, …). Nothing left the device, so the
+  /// caller can safely retry without risking a duplicate SMS.
+  failed,
+
   /// The SEND_SMS permission was denied this time (can be asked again).
   permissionDenied,
 
